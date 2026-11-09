@@ -48,11 +48,52 @@ class MapController {
         const route = RoutingService.calculateRoadRoute(canteenCoords, centerCoords);
         const ineligibilityReasons = [];
 
-        // 1. Food safety verification pre-condition
+        // 1. Food safety verification pre-condition with detailed reasons
         if (surplus.safetyStatus !== 'verified') {
-          ineligibilityReasons.push(
-            `Food safety status is '${surplus.safetyStatus}'. Only verified food listings can be matched or scheduled for pickup.`
-          );
+          if (surplus.safetyStatus === 'pending') {
+            // Keep "Food safety status is" prefix so existing test assertions continue to pass
+            ineligibilityReasons.push("Food safety status is 'pending'. Safety verification is pending. Listing cannot be matched.");
+          } else if (surplus.safetyStatus === 'rejected') {
+            ineligibilityReasons.push("Food safety status is 'rejected'. Safety verification was rejected. Listing cannot be matched.");
+          } else {
+            ineligibilityReasons.push(`Food safety status is '${surplus.safetyStatus}'. Only verified food listings can be matched or scheduled for pickup.`);
+          }
+        }
+        // 2. Available quantity must be > 0
+        if (surplus.availableQuantityKg <= 0) {
+          ineligibilityReasons.push('No available quantity remaining for allocation.');
+        }
+        // 3. Fully allocated check (status matched and no quantity left)
+        if (surplus.status === 'matched' && surplus.availableQuantityKg <= 0) {
+          ineligibilityReasons.push('Listing is fully allocated and cannot accept new offers.');
+        }
+        // 4. Cancelled listing check
+        if (surplus.status === 'cancelled') {
+          ineligibilityReasons.push('Listing has been cancelled by the coordinator.');
+        }
+        // 5. Expired listing check
+        if (surplus.status === 'expired') {
+          ineligibilityReasons.push('Listing has expired and is no longer eligible for allocation.');
+        }
+        // 6. Pickup deadline passed check
+        // The pickup_deadline column stores either a full ISO datetime ("YYYY-MM-DDTHH:MM"),
+        // a date+time string ("YYYY-MM-DD HH:MM"), or a time-only string ("HH:MM").
+        // Time-only values represent today's date and must be parsed accordingly.
+        if (surplus.pickupDeadline) {
+          let deadline;
+          const timeOnlyPattern = /^\d{1,2}:\d{2}$/; // e.g. "14:30"
+          if (timeOnlyPattern.test(surplus.pickupDeadline.trim())) {
+            // Treat as a time on today's date in the local environment
+            const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+            deadline = new Date(`${todayStr}T${surplus.pickupDeadline.trim()}:00`);
+          } else {
+            deadline = new Date(surplus.pickupDeadline);
+          }
+          if (isNaN(deadline.getTime())) {
+            ineligibilityReasons.push('Pickup deadline format is invalid.');
+          } else if (deadline < new Date()) {
+            ineligibilityReasons.push('Pickup deadline has already passed.');
+          }
         }
 
         // 2. Road travel time threshold (strict 15-minute window)
@@ -91,8 +132,21 @@ class MapController {
           address: center.address,
           lat: center.lat,
           lng: center.lng,
-          estimatedDistanceKm: route.estimatedDistanceKm,
+          // --- Distance and routing fields ---
+          // straightLineDistanceKm: exact Haversine (great-circle) straight-line distance
+          straightLineDistanceKm: route.straightLineDistanceKm,
+          // estimatedRoadDistanceKm: simulated road distance (1.38× factor); NOT a live road measurement
+          estimatedRoadDistanceKm: route.estimatedRoadDistanceKm,
+          // estimatedDistanceKm: alias for estimatedRoadDistanceKm, retained for backward compatibility
+          estimatedDistanceKm: route.estimatedRoadDistanceKm,
           estimatedTravelTimeMin: route.estimatedTravelTimeMin,
+          // Routing metadata – clearly identifies whether routing is simulated or live
+          routingStatus: route.routingStatus,
+          isLiveRouting: route.isLiveRouting,
+          routingProvider: route.routingProvider,
+          // routeGeometry: simulated interpolated path; NOT a real turn-by-turn street route
+          routeGeometry: route.routeGeometry,
+          // --- Capacity and demand ---
           availableCapacityKg: center.availableCapacityKg,
           totalCapacityKg: center.capacityKg,
           demand: {
@@ -103,7 +157,6 @@ class MapController {
           },
           isEligible,
           ineligibilityReasons,
-          routeGeometry: route.routeGeometry,
         };
       });
 
@@ -131,10 +184,14 @@ class MapController {
           lng: canteen.lng,
         },
         routingMetadata: {
+          // provider is kept as 'simulated_osrm_road_network' for API stability.
+          // This is NOT live OSRM routing. All values are simulated estimates.
           provider: 'simulated_osrm_road_network',
           isLiveRouting: false,
           maxTravelTimeEligibilityMin: MAX_TRAVEL_TIME_MIN,
-          note: 'Calculated using calibrated road network model. Travel times reflect estimated transit and traffic limits.',
+          note: 'All distances and travel times are estimates from a calibrated campus road network model. ' +
+                'Simulated values have NOT been verified against live GPS or road routing. ' +
+                'The 15-minute transit eligibility threshold is an estimate, not a confirmed real-world travel time.',
         },
         centers: sortedCenters,
         summary: {

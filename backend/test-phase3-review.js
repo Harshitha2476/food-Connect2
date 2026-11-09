@@ -4,9 +4,10 @@ const path = require('path');
 const app = require('./server');
 const { getDatabase } = require('./database/connection');
 
-const TEST_PORT = 5096;
+// Use port 0 so the OS assigns an available port automatically.
+// This avoids EACCES errors from restricted/reserved port numbers.
 
-function request(path, options = {}) {
+function makeRequest(port, urlPath, options = {}) {
   return new Promise((resolve, reject) => {
     const payload = options.body ? JSON.stringify(options.body) : null;
     const headers = {
@@ -20,8 +21,8 @@ function request(path, options = {}) {
     const req = http.request(
       {
         hostname: '127.0.0.1',
-        port: TEST_PORT,
-        path: encodeURI(path),
+        port,
+        path: encodeURI(urlPath),
         method: options.method || 'GET',
         headers,
       },
@@ -56,62 +57,67 @@ function request(path, options = {}) {
 /**
  * Helper to upload multipart/form-data
  */
-function uploadMultipart(urlPath, fields, fileField, filename, fileContent, token) {
-  return new Promise((resolve, reject) => {
-    const boundary = '----WebKitFormBoundary' + Math.random().toString(16).slice(2);
-    let postData = '';
+function makeUploadMultipart(port) {
+  return function uploadMultipart(urlPath, fields, fileField, filename, fileContent, token) {
+    return new Promise((resolve, reject) => {
+      const boundary = '----WebKitFormBoundary' + Math.random().toString(16).slice(2);
+      let postData = '';
 
-    for (const [key, value] of Object.entries(fields)) {
-      postData += `--${boundary}\r\n`;
-      postData += `Content-Disposition: form-data; name="${key}"\r\n\r\n`;
-      postData += `${value}\r\n`;
-    }
-
-    if (fileField && filename) {
-      postData += `--${boundary}\r\n`;
-      postData += `Content-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\n`;
-      postData += `Content-Type: image/jpeg\r\n\r\n`;
-    }
-
-    const prePayload = Buffer.from(postData, 'utf8');
-    const filePayload = Buffer.isBuffer(fileContent) ? fileContent : Buffer.from(fileContent || '', 'binary');
-    const postPayload = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-    const fullBody = Buffer.concat([prePayload, filePayload, postPayload]);
-
-    const req = http.request(
-      {
-        hostname: '127.0.0.1',
-        port: TEST_PORT,
-        path: encodeURI(urlPath),
-        method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': fullBody.length,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      },
-      (res) => {
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          try {
-            resolve({ statusCode: res.statusCode, data: JSON.parse(body) });
-          } catch {
-            resolve({ statusCode: res.statusCode, raw: body });
-          }
-        });
+      for (const [key, value] of Object.entries(fields)) {
+        postData += `--${boundary}\r\n`;
+        postData += `Content-Disposition: form-data; name="${key}"\r\n\r\n`;
+        postData += `${value}\r\n`;
       }
-    );
-    req.on('error', reject);
-    req.write(fullBody);
-    req.end();
-  });
+
+      if (fileField && filename) {
+        postData += `--${boundary}\r\n`;
+        postData += `Content-Disposition: form-data; name="${fileField}"; filename="${filename}"\r\n`;
+        postData += `Content-Type: image/jpeg\r\n\r\n`;
+      }
+
+      const prePayload = Buffer.from(postData, 'utf8');
+      const filePayload = Buffer.isBuffer(fileContent) ? fileContent : Buffer.from(fileContent || '', 'binary');
+      const postPayload = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+      const fullBody = Buffer.concat([prePayload, filePayload, postPayload]);
+
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: encodeURI(urlPath),
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Content-Length': fullBody.length,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (c) => (body += c));
+          res.on('end', () => {
+            try {
+              resolve({ statusCode: res.statusCode, data: JSON.parse(body) });
+            } catch {
+              resolve({ statusCode: res.statusCode, raw: body });
+            }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(fullBody);
+      req.end();
+    });
+  };
 }
 
 async function runReviewTests() {
   console.log('\n🔍 Starting Phase 3 Security Review & Map Feature Tests...\n');
 
-  const server = app.listen(TEST_PORT, async () => {
+  const server = app.listen(0, async () => {
+    const boundPort = server.address().port;
+    const request = (urlPath, options) => makeRequest(boundPort, urlPath, options);
+    const uploadMultipart = makeUploadMultipart(boundPort);
     let passed = 0;
     let total = 0;
 

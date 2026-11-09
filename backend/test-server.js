@@ -1,14 +1,16 @@
 const http = require('http');
 const app = require('./server');
 
-const TEST_PORT = 5099;
+// Use port 0 so the OS assigns an available port automatically.
+// This avoids EACCES errors from restricted/reserved port numbers.
+const TEST_PORT = 0;
 
-function request(path, options = {}) {
+function makeRequest(port, path, options = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
         hostname: '127.0.0.1',
-        port: TEST_PORT,
+        port,
         path,
         method: options.method || 'GET',
         headers: {
@@ -48,6 +50,8 @@ async function runServerTests() {
   console.log('\n🚀 Starting Phase 1 Express Server Integration Tests...\n');
 
   const server = app.listen(TEST_PORT, async () => {
+    const boundPort = server.address().port;
+    const request = (path, options) => makeRequest(boundPort, path, options);
     let passed = 0;
     let total = 0;
 

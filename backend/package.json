@@ -12,7 +12,8 @@
     "test:auth": "node test-auth.js",
     "test:phase3": "node test-phase3.js",
     "test:review": "node test-phase3-review.js",
-    "test": "node database/test-connection.js && node test-server.js && node test-auth.js && node test-phase3.js && node test-phase3-review.js"
+    "test:map": "node test-map-eligibility.js",
+    "test": "node database/test-connection.js && node test-server.js && node test-auth.js && node test-phase3.js && node test-phase3-review.js && node test-map-eligibility.js"
   },
   "keywords": [
     "food-redistribution",
