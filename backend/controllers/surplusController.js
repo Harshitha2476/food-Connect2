@@ -1,5 +1,6 @@
 const SurplusModel = require('../models/Surplus');
 const CanteenModel = require('../models/Canteen');
+const MatchingService = require('../services/matchingService');
 const { logAudit } = require('../utils/audit');
 const { sendSuccess, sendError } = require('../utils/response');
 const { cleanupFile } = require('../middleware/upload');
@@ -81,8 +82,17 @@ class SurplusController {
         req
       );
 
+      // 5. Optional auto-matching trigger (if verified or explicitly requested)
+      let matchingResult = null;
+      if (req.body.autoMatch === true) {
+        matchingResult = MatchingService.runGreedyAllocation(newSurplus.id, req.user);
+      }
+
+      const freshSurplus = matchingResult ? SurplusModel.findById(newSurplus.id) : newSurplus;
+
       return sendSuccess(res, 201, 'Surplus food listing created. Safety verification is pending.', {
-        surplus: sanitizeSurplus(newSurplus, req.user),
+        surplus: sanitizeSurplus(freshSurplus, req.user),
+        ...(matchingResult ? { matching: matchingResult } : {}),
       });
     } catch (error) {
       if (req.file) cleanupFile(req.file.path);
@@ -344,8 +354,17 @@ class SurplusController {
         req
       );
 
+      // Optional auto-matching trigger upon verification
+      let matchingResult = null;
+      if (safetyStatus === 'verified' && (req.body.autoMatch === true || req.body.triggerMatching === true)) {
+        matchingResult = MatchingService.runGreedyAllocation(id, req.user);
+      }
+
+      const freshSurplus = matchingResult ? SurplusModel.findById(id) : updated;
+
       return sendSuccess(res, 200, `Food safety status updated to '${safetyStatus}'.`, {
-        surplus: sanitizeSurplus(updated, req.user),
+        surplus: sanitizeSurplus(freshSurplus, req.user),
+        ...(matchingResult ? { matching: matchingResult } : {}),
       });
     } catch (error) {
       next(error);
